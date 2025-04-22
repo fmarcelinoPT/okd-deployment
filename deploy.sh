@@ -20,12 +20,18 @@ set -euo pipefail
 # Note that the cluster subdomain has to match whatever you set up for
 # DNS.
 
-CLUSTER_SUBDOMAIN="cluster.okd.example.com"
-HYPERVISOR_1="hv1.okd.example.com"
-HYPERVISOR_2="hv2.okd.example.com"
-HYPERVISOR_3="hv3.okd.example.com"
+ANSIBLE_DIR="./ansible"
+
+CLUSTER_SUBDOMAIN="cluster.onemarc.io"
+HYPERVISOR_1="hera.onemarc.io"
+HYPERVISOR_2="poseidon.onemarc.io"
+HYPERVISOR_3="zeus.onemarc.io"
 
 ##### END INLINE CONFIGURATION VARIABLES ####
+
+# snap install kustomize
+# sudo dnf install awscli
+# sudo dnf install coreos-installer
 
 # check dependencies
 for cmd in 'ansible-playbook' 'kustomize' 'aws' 'curl' 'jq' 'mktemp' 'oc' 'tar' 'mkdir' 'cp' 'mv' 'rm' 'sed' 'terraform' 'ssh' 'openssl'; do
@@ -36,9 +42,16 @@ for cmd in 'ansible-playbook' 'kustomize' 'aws' 'curl' 'jq' 'mktemp' 'oc' 'tar' 
 done
 
 if [[ -z ${OPENSHIFT_INSTALL_RELEASE+x} ]]; then
-    # get the latest okd release from the repo
-    OPENSHIFT_INSTALL_RELEASE="$(curl -s https://api.github.com/repos/okd-project/okd/releases | jq -r '.[0].tag_name')"
-    OKD_DOWNLOAD_URL="$(curl -s https://api.github.com/repos/okd-project/okd/releases | jq -r '.[0].assets[] | select(.name | contains("openshift-install-linux-4")) | .browser_download_url')"
+    # get the latest okd release from the repo (disregarding pre-release versions)
+    OPENSHIFT_INSTALL_RELEASE=$(
+        curl -s https://api.github.com/repos/okd-project/okd-scos/releases |
+        jq -r 'map(select(.prerelease == false)) | .[0].tag_name'
+    )
+    OKD_DOWNLOAD_URL=$(
+        curl -s https://api.github.com/repos/okd-project/okd-scos/releases |
+        jq -r 'map(select(.prerelease == false)) | .[0].assets[] | 
+        select(.name | contains("openshift-install-linux-4")) | .browser_download_url'
+    )
 fi
 
 echo "Using OKD release $OPENSHIFT_INSTALL_RELEASE to bring up cluster."
@@ -88,45 +101,63 @@ get_iso() {
     rm -rf $TEMPDIR
 }
 
-echo "Creating install configuration manifests..."
+if ! test -f "$ISOS_DIR"/bootstrap.iso; then
+    echo "Creating install configuration manifests..."
 
-[[ -f "$OPENSHIFT_INSTALL" ]] || get_installer
-[[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR"
-[[ -f "$FEDORA_COREOS_ISO" ]] || get_iso
-rm -f "$ISOS_DIR"/*.iso
+    [[ -f "$OPENSHIFT_INSTALL" ]] || get_installer
+    [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR"
+    [[ -f "$FEDORA_COREOS_ISO" ]] || get_iso
+    rm -f "$ISOS_DIR"/*.iso
 
-mkdir -p "$INSTALL_DIR"
-cp ./install-config.yaml "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+    cp ./install-config.yaml "$INSTALL_DIR"
 
-"${OPENSHIFT_INSTALL}" create manifests --dir="$INSTALL_DIR"
+    "${OPENSHIFT_INSTALL}" create manifests --dir="$INSTALL_DIR"
 
-sed -i -e 's/mastersSchedulable: true/mastersSchedulable: false/' "$INSTALL_DIR/manifests/cluster-scheduler-02-config.yml"
+    sed -i -e 's/mastersSchedulable: true/mastersSchedulable: false/' "$INSTALL_DIR/manifests/cluster-scheduler-02-config.yml"
 
-"${OPENSHIFT_INSTALL}" create ignition-configs --dir="$INSTALL_DIR"
+    # Backup default manifests
+    rm -rf "$PROJECT_DIR/default-config/"
+    mkdir "$PROJECT_DIR/default-config/"
+    cp -r $INSTALL_DIR/* "$PROJECT_DIR/default-config/"
 
-echo "Done. Now generating ISOs and copying them to the remote... be ready to enter your password!"
+    cp custom-manifests/* "$INSTALL_DIR/manifests/"
 
-for t in master worker bootstrap; do
-    coreos-installer iso customize --dest-device /dev/vda --dest-ignition "$INSTALL_DIR/$t.ign" --dest-console ttyS0,115200 --dest-console tty0 -o $ANSIBLE_DIR/files/$t.iso fedora-coreos-$COREOS_VERSION-live.x86_64.iso
-done
+    "${OPENSHIFT_INSTALL}" create ignition-configs --dir="$INSTALL_DIR"
 
-ansible-playbook -i "${HYPERVISOR_1},${HYPERVISOR_2},${HYPERVISOR_3}," -K --user root $ANSIBLE_DIR/main.yml
+    # Prettify ignition files
+    python -m json.tool "$INSTALL_DIR/bootstrap.ign" > "$INSTALL_DIR/bootstrap-pretty.ign" && cp "$INSTALL_DIR/bootstrap-pretty.ign" "$INSTALL_DIR/bootstrap.ign" && rm "$INSTALL_DIR/bootstrap-pretty.ign"
+    python -m json.tool "$INSTALL_DIR/master.ign" > "$INSTALL_DIR/master-pretty.ign" && cp "$INSTALL_DIR/master-pretty.ign" "$INSTALL_DIR/master.ign" && rm "$INSTALL_DIR/master-pretty.ign"
+    python -m json.tool "$INSTALL_DIR/worker.ign" > "$INSTALL_DIR/worker-pretty.ign" && cp "$INSTALL_DIR/worker-pretty.ign" "$INSTALL_DIR/worker.ign" && rm "$INSTALL_DIR/worker-pretty.ign"
+
+    cp -r $INSTALL_DIR/* "$PROJECT_DIR/default-config/"
+
+    echo "Done. Now generating ISOs and copying them to the remote... be ready to enter your password!"
+
+    for t in master worker bootstrap; do
+        coreos-installer iso customize --dest-device /dev/vda --dest-ignition "$INSTALL_DIR/$t.ign" --dest-console ttyS0,115200 --dest-console tty0 -o $ANSIBLE_DIR/files/$t.iso fedora-coreos-$COREOS_VERSION-live.x86_64.iso
+    done
+
+    ansible-playbook -i "${HYPERVISOR_1},${HYPERVISOR_2},${HYPERVISOR_3}," -K --user root $ANSIBLE_DIR/main.yml
+fi
 
 echo "Done. Now initializing cluster..."
 
+# export TF_LOG=”DEBUG”
 # we do the bootstrap last so that all the actual infra can start bootstrapping ASAP
 for directory in hv3 hv2 hv1 bootstrap; do
     pushd "$TERRAFORM_HOSTS_BASE_DIR/$directory"
     [[ -d .terraform ]] || terraform init
-    terraform apply --var "coreos_version=$COREOS_VERSION" --auto-approve
+    terraform apply --auto-approve
     popd
 done
+# unset TF_LOG
 
 echo "Done."
 
 echo "Now we wait for the bootstrap to complete."
 
-"${OPENSHIFT_INSTALL}" --dir=config wait-for bootstrap-complete --log-level=debug
+"${OPENSHIFT_INSTALL}" --dir="$INSTALL_DIR" wait-for bootstrap-complete --log-level=debug
 
 echo "The cluster is provisionally available. Removing the bootstrap VM..."
 

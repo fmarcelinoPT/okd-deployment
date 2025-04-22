@@ -1,6 +1,7 @@
 config/
 openshift-install
 *.tfvars
+*.iso
 openshift-install*
 .openshift-install.log
 .openshift_install.log
@@ -8,5 +9,5 @@ openshift-install*
 .openshift_install_state.json
 
 # User-generated config files
-install-config.yaml
+# install-config.yaml
 storage/rook-dashboard.yaml

@@ -1,0 +1,65 @@
+# This file denotes the base configuration for the OKD 4.x cluster deployment.
+# Docs: https://github.com/openshift/installer/blob/main/docs/user/customization.md
+apiVersion: v1
+baseDomain: onemarc.io
+compute:
+  - hyperthreading: Enabled
+    name: worker
+    replicas: 9
+controlPlane:
+  hyperthreading: Enabled
+  name: master
+  replicas: 3
+metadata:
+  name: okd-lab
+capabilities:
+  baselineCapabilitySet: None
+  additionalEnabledCapabilities:
+    - baremetal
+    - CSISnapshot
+    - Console
+    - Ingress
+networking:
+  machineNetwork:
+    - cidr: 192.168.8.0/24 # Must match your physical network
+  clusterNetwork:
+    - cidr: 10.128.0.0/14
+      hostPrefix: 23
+  serviceNetwork:
+    - 172.30.0.0/16
+  networkType: OVNKubernetes # or OpenShiftSDN
+platform:
+  none: {}
+  # baremetal:
+  #   apiVIPs: ["192.168.8.33"]  # Must be unused IP in your network | if defined == masters and workers look for that ip
+  #   ingressVIPs: ["192.168.8.34"]  # Another unused IP
+pullSecret: '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}'
+sshKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDWDAlsCB5kRfoYW1jnd0/9kmZtalmN4cM8T5qJ8ualsMVTwo22ijKwieQG5yRpvgWAb87tBpoTtx+moKk7DIWezkyAAn5ptzHDeupyXith3otLtm8gy6uSvHJWrd3K24pnsjCuHAvlKmqtpC2IiPM0EoHsQLljiOPsSfJ4I8IBCrNMXOZI1tAzTIJB3GIsLk1D6E6/rwSWwqif87mQlqFV2dv3F0qpBN1ZPNldNCor2FD7RWmJsIGmGFadoIW/G/MXDlHnKqQQtPCytQNF2Q8JLf4eSytZRhcqrkOM3DmZ2hItM3JxbGB7NfUWS6gN9CzamE5Xumb2MxHQMqQrvJaKggsWTNecioDL1nm5FKfgbKMOoKpKkkw3ng0npay+rnpWcLceX3u9de49qEi68P6o/aF4MjdtXODFyT9lr6dmd51/7TYkmSlmIbcVsZi6rN9VvO7pOwy3tw4bPBj0IYX1OsDv1OTKPzKWPtTCY3Fa485vSRJP8y77OxlgzTSjhmskrWQNXd3rftjbuvWzg8uCVhh0edbo3TU5+z6dcMszkU1m7nPeyYp2pOcamKyXkOAgamfrqvOzPVun1OEwpc/5b7mSPufnGREj35RTWqYAFDpZ3BeUaHOKRwoUSsMNuoNPeaR723YZVhduaAUKZdnycHffduRWsp7S723AMWyaLw== support_pub_key"
+additionalTrustBundle: |
+  -----BEGIN CERTIFICATE-----
+  MIIEoTCCA4mgAwIBAgIUQrT+gTZkrKCgjYnG+ym/bxe+/vswDQYJKoZIhvcNAQEL
+  BQAwgZExCzAJBgNVBAYTAlBUMSAwHgYDVQQIDBdTb2JyYWwgZGUgTW9udGUgQWdy
+  YcOnbzEgMB4GA1UEBwwXU29icmFsIGRlIE1vbnRlIEFncmHDp28xEzARBgNVBAoM
+  Ck9uZU1hcmMuaW8xKTAnBgNVBAMMIE9uZU1hcmMuaW8gQXV0aG9yaXR5IENlcnRp
+  ZmljYXRlMB4XDTI0MDkyMjIxNDU0NVoXDTI5MDkyMTIxNDU0NVowgZExCzAJBgNV
+  BAYTAlBUMSAwHgYDVQQIDBdTb2JyYWwgZGUgTW9udGUgQWdyYcOnbzEgMB4GA1UE
+  BwwXU29icmFsIGRlIE1vbnRlIEFncmHDp28xEzARBgNVBAoMCk9uZU1hcmMuaW8x
+  KTAnBgNVBAMMIE9uZU1hcmMuaW8gQXV0aG9yaXR5IENlcnRpZmljYXRlMIIBIjAN
+  BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4VTGfRioB8++d0GMNv8Vie9lP4Z+
+  b787dlRvdUGCEmYrX++zuq07fbStInFEUhCABZBI17I2Pb+nnZ9lF/haVXK0S9TA
+  H3FnByMIjSY9gqJGddRnCIqF+rqDxikJMDCKuoEIu10ZomvnMCkrpU/orPp0/iBx
+  pZqQFTKbHQDP0DKxgBi+EpUXWPGUD2QX2wFeWXXZOxpt9THJRk0SbjqVAHYkHYks
+  lS3O25UUlMBEot2o27v5ktWmMY05CHH+hYX1sOTz1z4FU3apZL1cwaVE5kL6Rh6p
+  Jog+ReFhXQrrDZsCYlZCSDwnvifAiA9OHsXotMIA+jiJMX/SPb0EDsox9QIDAQAB
+  o4HuMIHrMAwGA1UdEwQFMAMBAf8wHQYDVR0OBBYEFF43KoKQBB1G33+5p+4jMGx+
+  rydwMIG7BgNVHSMEgbMwgbChgZekgZQwgZExCzAJBgNVBAYTAlBUMSAwHgYDVQQI
+  DBdTb2JyYWwgZGUgTW9udGUgQWdyYcOnbzEgMB4GA1UEBwwXU29icmFsIGRlIE1v
+  bnRlIEFncmHDp28xEzARBgNVBAoMCk9uZU1hcmMuaW8xKTAnBgNVBAMMIE9uZU1h
+  cmMuaW8gQXV0aG9yaXR5IENlcnRpZmljYXRlghRCtP6BNmSsoKCNicb7Kb9vF77+
+  +zANBgkqhkiG9w0BAQsFAAOCAQEAIeiA12gBNBckBIUvkb3aKQS7fXH9FLIE/5F0
+  C7A7VnpnB0yBRmBQjAgNq9KlOsArySr+xnO3fWeDgHAzktXNz+9GXaj1c7PfWx3l
+  oYiFCD857Kd3Br+Po3tgeJvnVjsaSSZMpkIiVhZnX0ywgI7YdchBaE4pCC2w0inP
+  ZBAUJm0qo0wyurzBaaUaz73gElnjw/KPfepOMU5iNEMeKa2qPts+IyDlNC7B/Mi4
+  k+w7YmeV8A7x5eFcqEJquZu/M53wBNeUPZmhxQGfKWSN8Ghi5V49c/84dlHY52KH
+  z2DbK/qKbM/CYy5rvYSAQBcNCdQOE3zTstiqM394JOqlUc4c3g==
+  -----END CERTIFICATE-----

@@ -1,0 +1,16 @@
+apiVersion: config.openshift.io/v1
+kind: ClusterVersion
+metadata:
+  namespace: openshift-cluster-version
+  name: version
+spec:
+  upstream: https://amd64.origin.releases.ci.openshift.org/graph
+  channel: stable-scos-4
+  clusterID: b187d718-b830-46a8-b2ae-d75be3f69326
+  capabilities:
+    baselineCapabilitySet: None
+    additionalEnabledCapabilities: 
+    - baremetal
+    - CSISnapshot
+    - Console
+    - Ingress
