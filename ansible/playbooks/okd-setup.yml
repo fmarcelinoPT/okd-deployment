@@ -1,0 +1,244 @@
+---
+- name: Prepare Ubuntu nodes for OKD installation
+  hosts: all
+  become: yes
+
+  vars:
+    kubernetes_version: v1.32
+    cri_o_version: v1.32
+  #   okd_version: "4.12.0-0.okd-2023-07-23-062505"
+  #   okd_install_dir: "/opt/okd-install"
+
+  tasks:
+    # Phase 1: System Preparation
+    # - name: Update apt cache
+    #   apt:
+    #     update_cache: yes
+    #   changed_when: "'apt cache updated' in apt_update_result.stdout"
+
+    - name: Install essential packages
+      apt:
+        name:
+          - python3
+          - git
+          - curl
+          - wget
+          - openssh-server
+          - sudo
+          - net-tools
+          - jq
+          - linux-modules-extra-{{ ansible_kernel }}
+        state: present
+      register: pkg_install
+      changed_when: pkg_install.changed
+
+    # Phase 2: Kernel Configuration
+    - name: Load required kernel modules
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - br_netfilter
+        - bridge
+      changed_when: false  # Module loading doesn't indicate system change
+
+    - name: Persist kernel modules at boot
+      lineinfile:
+        path: /etc/modules
+        line: "{{ item }}"
+        state: present
+        create: yes
+      with_items:
+        - br_netfilter
+        - bridge
+      register: modules_persist
+      changed_when: modules_persist.changed
+
+    - name: Configure sysctl parameters
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      with_items:
+        - { key: 'net.ipv4.ip_forward', value: '1' }
+        - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+      register: sysctl_changes
+      changed_when: sysctl_changes.changed
+
+    # Phase 3: Network Configuration
+    - name: Disable ufw firewall
+      ufw:
+        state: disabled
+      register: ufw_change
+      changed_when: ufw_change.changed
+
+    - name: Configure Netplan for OKD compatibility
+      copy:
+        dest: /etc/netplan/99-okd.yaml
+        content: |
+          network:
+            version: 2
+            renderer: networkd
+            ethernets:
+              {{ ansible_default_ipv4.interface }}:
+                accept-ra: no
+                dhcp4: yes
+                optional: true
+        mode: "0644"
+      register: netplan_config
+      changed_when: netplan_config.changed
+
+    - name: Apply Netplan configuration
+      command: netplan apply
+      when: ansible_os_family == 'Debian'
+      register: netplan_apply
+      changed_when: "'netplan apply' in netplan_apply.cmd"
+
+    # Phase 4: Container Runtime Prerequisites
+    - name: Add Kubernetes repository
+      become: true
+      ansible.builtin.shell: |
+        sudo rm -rf /etc/apt/keyrings/kubernetes-apt-keyring.gpg && sudo rm -rf /etc/apt/sources.list.d/kubernetes.list && sudo rm -rf /etc/apt/keyrings/cri-o-apt-keyring.gpg && sudo rm -rf /etc/apt/sources.list.d/cri-o.list
+
+    - name: Ensure dependencies are installed
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - software-properties-common
+        state: present
+        update_cache: yes
+
+    - name: Create keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Kubernetes GPG key
+      become: true
+      ansible.builtin.shell: curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ kubernetes_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    - name: Add Kubernetes repository
+      become: true
+      ansible.builtin.shell: |
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ kubernetes_version }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      args:
+        creates: /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Add CRI-O GPG key
+      become: true
+      ansible.builtin.shell: curl -fsSL https://download.opensuse.org/repositories/isv:/cri-o:/stable:/{{ cri_o_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/cri-o-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/cri-o-apt-keyring.gpg
+    - name: Add CRI-O repository
+      become: true
+      ansible.builtin.shell: |
+        echo "deb [signed-by=/etc/apt/keyrings/cri-o-apt-keyring.gpg] https://download.opensuse.org/repositories/isv:/cri-o:/stable:/{{ cri_o_version }}/deb/ /" > /etc/apt/sources.list.d/cri-o.list
+      args:
+        creates: /etc/apt/sources.list.d/cri-o.list
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install CRI-O
+      apt:
+        name:
+          - cri-o
+        state: present
+
+    - name: Enable and start CRI-O service
+      systemd:
+        name: crio
+        enabled: yes
+        state: started
+
+    # Phase 5: System Optimization
+    - name: Disable swap completely
+      block:
+        - name: Turn off swap
+          command: swapoff -a
+          changed_when: true  # Always report change as we can't reliably detect
+          register: swapoff_result
+
+        - name: Disable swap service
+          systemd:
+            name: swap.target
+            masked: yes
+            state: stopped
+
+        - name: Comment swap in fstab
+          replace:
+            path: /etc/fstab
+            regexp: '^([^#].*\sswap\s.*)$'
+            replace: '#\1'
+      when: ansible_swaptotal_mb > 0
+
+    - name: Disable cloud-init network configuration
+      copy:
+        dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+        content: "network: {config: disabled}"
+        mode: "0644"
+      register: cloud_init_disable
+      changed_when: cloud_init_disable.changed
+
+    - name: Ensure chrony is installed for time sync
+      apt:
+        name: chrony
+        state: present
+      register: chrony_install
+      changed_when: chrony_install.changed
+
+- name: Download and install OKD tools
+  hosts: localhost
+  tasks:
+    - name: Create installation directory
+      file:
+        path: "{{ okd_install_dir }}"
+        state: directory
+        mode: "0755"
+      register: install_dir
+      changed_when: install_dir.changed
+
+    - name: Download OKD installer
+      get_url:
+        url: "https://github.com/okd-project/okd/releases/download/{{ okd_version }}/openshift-install-linux-{{ okd_version }}.tar.gz"
+        dest: "/tmp/openshift-install.tar.gz"
+        checksum: "sha256:..."  # Add actual checksum
+        mode: "0644"
+      register: installer_download
+      changed_when: installer_download.changed
+
+    - name: Extract OKD installer
+      unarchive:
+        src: "/tmp/openshift-install.tar.gz"
+        dest: "/usr/local/bin/"
+        remote_src: yes
+        mode: "0755"
+        creates: "/usr/local/bin/openshift-install"
+      register: installer_extract
+      changed_when: installer_extract.changed
+
+    - name: Download OKD client
+      get_url:
+        url: "https://github.com/okd-project/okd/releases/download/{{ okd_version }}/openshift-client-linux-{{ okd_version }}.tar.gz"
+        dest: "/tmp/openshift-client.tar.gz"
+        mode: "0644"
+      register: client_download
+      changed_when: client_download.changed
+
+    - name: Extract OKD client
+      unarchive:
+        src: "/tmp/openshift-client.tar.gz"
+        dest: "/usr/local/bin/"
+        remote_src: yes
+        mode: "0755"
+        creates: "/usr/local/bin/oc"
+      register: client_extract
+      changed_when: client_extract.changed

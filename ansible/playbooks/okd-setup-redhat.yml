@@ -1,0 +1,88 @@
+---
+- name: Prepare OKD nodes
+  hosts: all
+  become: true
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - python3
+          - git
+          - curl
+          - wget
+          - openssh-server
+          - sudo
+        state: present
+        update_cache: yes
+
+    - name: Disable swap
+      shell: |
+        swapoff -a
+        sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+    - name: Configure sysctl
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      with_items:
+        - { key: "net.ipv4.ip_forward", value: "1" }
+        - { key: "net.bridge.bridge-nf-call-iptables", value: "1" }
+        - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+
+- name: Install OKD
+  hosts: localhost
+  become: false
+  tasks:
+    - name: Download OKD installer
+      get_url:
+        url: https://github.com/okd-project/okd/releases/download/{{ okd_version }}/openshift-install-linux-{{ okd_version }}.tar.gz
+        dest: /tmp/openshift-install.tar.gz
+        mode: "0755"
+
+    - name: Extract OKD installer
+      unarchive:
+        src: /tmp/openshift-install.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+        mode: "0755"
+
+    - name: Download OKD client
+      get_url:
+        url: https://github.com/okd-project/okd/releases/download/{{ okd_version }}/openshift-client-linux-{{ okd_version }}.tar.gz
+        dest: /tmp/openshift-client.tar.gz
+        mode: "0755"
+
+    - name: Extract OKD client
+      unarchive:
+        src: /tmp/openshift-client.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+        mode: "0755"
+
+    - name: Create install directory
+      file:
+        path: "{{ okd_install_dir }}"
+        state: directory
+
+    - name: Generate install config
+      template:
+        src: install-config.yaml.j2
+        dest: "{{ okd_install_dir }}/install-config.yaml"
+
+    - name: Generate manifests
+      command: openshift-install create manifests --dir={{ okd_install_dir }}
+
+    - name: Create ignition configs
+      command: openshift-install create ignition-configs --dir={{ okd_install_dir }}
+
+    - name: Copy ignition files to web server
+      copy:
+        src: "{{ okd_install_dir }}/{{ item }}"
+        dest: "/var/www/html/{{ item }}"
+        mode: "0644"
+      with_items:
+        - bootstrap.ign
+        - master.ign
+        - worker.ign
